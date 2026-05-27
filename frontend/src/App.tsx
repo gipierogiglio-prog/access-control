@@ -2,33 +2,49 @@ import { useState, useEffect } from 'react'
 
 const API = import.meta.env.VITE_API_URL || ''
 
-interface Domain {
+interface AppDomain {
   id: string
   name: string
-  zone: string
-  content: string
-  proxied: boolean
-  protection: string
-  hasAccess: boolean
+  appName: string
+  created: string
+}
+
+interface Subdomain {
+  name: string
+  full: string
 }
 
 function App() {
-  const [domains, setDomains] = useState<Domain[]>([])
-  const [config, setConfig] = useState({ emails: [''], zones: { uk: '', com: '' } })
+  const [domains, setDomains] = useState<AppDomain[]>([])
+  const [subdomains, setSubdomains] = useState<Subdomain[]>([])
+  const [zones, setZones] = useState<{ name: string }[]>([])
+  const [config, setConfig] = useState({ emails: [''] })
   const [loading, setLoading] = useState(true)
-  const [filter, setFilter] = useState('all')
-  const [newEmail, setNewEmail] = useState('')
-  const [comDomain, setComDomain] = useState('')
   const [actionMsg, setActionMsg] = useState('')
+  const [newEmail, setNewEmail] = useState('')
+
+  // New domain form
+  const [subdomain, setSubdomain] = useState('')
+  const [selectedZone, setSelectedZone] = useState('devgiglio.uk')
+  const [customSubdomain, setCustomSubdomain] = useState('')
+  const [useCustom, setUseCustom] = useState(false)
 
   const load = async () => {
     setLoading(true)
     try {
-      const res = await fetch(`${API}/api/domains`)
-      if (res.ok) {
-        const data = await res.json()
-        setDomains(data.domains || [])
-        setConfig(data.config || { emails: [''], zones: {} })
+      const [domRes, subRes] = await Promise.all([
+        fetch(`${API}/api/domains`),
+        fetch(`${API}/api/subdomains`)
+      ])
+      if (domRes.ok) {
+        const d = await domRes.json()
+        setDomains(d.domains || [])
+        setConfig(d.config || { emails: [''] })
+      }
+      if (subRes.ok) {
+        const s = await subRes.json()
+        setSubdomains(s.uk || [])
+        setZones(s.zones || [])
       }
     } catch(e) { console.error(e) }
     setLoading(false)
@@ -38,42 +54,43 @@ function App() {
 
   const msg = (s: string) => { setActionMsg(s); setTimeout(() => setActionMsg(''), 4000) }
 
-  const setProtection = async (name: string, type: string) => {
-    await fetch(`${API}/api/protection/set`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, type })
-    })
-    await load()
+  const getFullDomain = () => {
+    const sub = useCustom ? customSubdomain.trim() : subdomain
+    if (!sub) return ''
+    return `${sub}.${selectedZone}`
   }
 
-  const activateAccess = async (name: string) => {
-    msg(`⏳ Ativando Zero Trust para ${name}...`)
+  const activateAccess = async () => {
+    const full = getFullDomain()
+    if (!full) return
+    msg(`⏳ Ativando Zero Trust para ${full}...`)
+    const name = full.split('.')[0]
     const res = await fetch(`${API}/api/access/create`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: name.split('.')[0], domain: name })
+      body: JSON.stringify({ name, domain: full })
     })
     const data = await res.json()
     if (data.success) {
-      await setProtection(name, 'cloudflare')
-      msg(`✅ ${name} protegido!`)
+      msg(`✅ ${full} protegido com Zero Trust!`)
+      setSubdomain('')
+      setCustomSubdomain('')
+      await load()
     } else {
       msg(`❌ ${data.errors?.[0]?.message || data.error || 'Erro'}`)
     }
   }
 
   const removeAccess = async (name: string) => {
-    msg(`⏳ Removendo Zero Trust de ${name}...`)
+    msg(`⏳ Removendo ${name}...`)
     const res = await fetch(`${API}/api/access/remove`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ domain: name })
     })
     const data = await res.json()
     if (data.success) {
-      await setProtection(name, 'none')
-      msg(`✅ ${name} sem proteção`)
-    } else {
-      msg(`❌ ${data.error}`)
-    }
+      msg(`✅ ${name} removido`)
+      await load()
+    } else { msg(`❌ ${data.error}`) }
   }
 
   const addEmail = async () => {
@@ -98,56 +115,26 @@ function App() {
   }
 
   const syncEmails = async () => {
-    msg('⏳ Sincronizando emails com todas as apps...')
+    msg('⏳ Sincronizando emails...')
     const res = await fetch(`${API}/api/access/sync`, { method: 'POST' })
     const data = await res.json()
     if (data.success) {
       const total = data.results?.length || 0
       const ok = data.results?.filter((r: any) => r.success).length || 0
-      msg(`✅ ${ok}/${total} aplicações atualizadas com os emails!`)
-    } else {
-      msg(`❌ ${data.error || 'Erro ao sincronizar'}`)
-    }
+      msg(`✅ ${ok}/${total} apps atualizadas`)
+    } else { msg(`❌ ${data.error}`) }
   }
 
-  const addComDomain = async () => {
-    if (!comDomain) return
-    await fetch(`${API}/api/protection/set`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: comDomain, type: 'cloudflare' })
-    })
-    setComDomain('')
-    await load()
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && getFullDomain()) activateAccess()
   }
-
-  const filtered = domains.filter(d => {
-    if (filter === 'protected') return d.protection !== 'none'
-    if (filter === 'active') return d.hasAccess
-    if (filter === 'com') return d.zone === 'com' || d.zone === 'manual'
-    return true
-  })
-
-  const stats = {
-    total: domains.length,
-    active: domains.filter(d => d.hasAccess).length,
-    cloudflare: domains.filter(d => d.protection === 'cloudflare').length,
-    wireguard: domains.filter(d => d.protection === 'wireguard').length,
-    pub: domains.filter(d => d.protection === 'none').length,
-  }
-
-  const btnF = (f: string, label: string) => (
-    <button key={f} onClick={() => setFilter(f)}
-      style={{ background: filter === f ? '#3b82f6' : '#1a1a1a', color: filter === f ? '#fff' : '#999', border: 'none', padding: '.35rem .75rem', borderRadius: 6, cursor: 'pointer', fontSize: '.8rem' }}>
-      {label}
-    </button>
-  )
 
   return (
-    <div style={{ maxWidth: 1000, margin: '0 auto', padding: '2rem 1rem', color: '#e5e5e5', fontFamily: 'system-ui, sans-serif', background: '#0f0f0f', minHeight: '100vh' }}>
+    <div style={{ maxWidth: 900, margin: '0 auto', padding: '2rem 1rem', color: '#e5e5e5', fontFamily: 'system-ui, sans-serif', background: '#0f0f0f', minHeight: '100vh' }}>
       <header style={{ marginBottom: '1.5rem' }}>
-        <h1 style={{ fontSize: '1.5rem', fontWeight: 700, margin: 0 }}>🔐 Access Control</h1>
+        <h1 style={{ fontSize: '1.5rem', fontWeight: 700, margin: 0 }}>🔐 Cloudflare Access</h1>
         <p style={{ color: '#666', margin: '.25rem 0 0', fontSize: '.85rem' }}>
-          Gerencie emails permitidos e ative Cloudflare Access para qualquer domínio
+          Gerencie quais domínios têm autenticação via Cloudflare Zero Trust
         </p>
       </header>
 
@@ -158,33 +145,110 @@ function App() {
       )}
 
       {/* Stats */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '.5rem', marginBottom: '1rem' }}>
-        {[
-          { label: 'Total', value: stats.total, color: '#666' },
-          { label: '✅ Ativo', value: stats.active, color: '#22c55e' },
-          { label: '🔒 CF Pendente', value: stats.cloudflare - stats.active, color: '#f59e0b' },
-          { label: '🔐 WireGuard', value: stats.wireguard, color: '#3b82f6' },
-          { label: '🌐 Público', value: stats.pub, color: '#666' },
-        ].map(s => (
-          <div key={s.label} style={{ background: '#1a1a1a', borderRadius: 10, padding: '.65rem', textAlign: 'center' }}>
-            <div style={{ fontSize: '1.3rem', fontWeight: 700, color: s.color }}>{s.value}</div>
-            <div style={{ fontSize: '.7rem', color: '#666', marginTop: '.1rem' }}>{s.label}</div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '.5rem', marginBottom: '1.5rem' }}>
+        <div style={{ background: '#1a1a1a', borderRadius: 10, padding: '.75rem', textAlign: 'center' }}>
+          <div style={{ fontSize: '1.5rem', fontWeight: 700, color: '#22c55e' }}>{domains.length}</div>
+          <div style={{ fontSize: '.75rem', color: '#666' }}>✅ Domínios com Zero Trust</div>
+        </div>
+        <div style={{ background: '#1a1a1a', borderRadius: 10, padding: '.75rem', textAlign: 'center' }}>
+          <div style={{ fontSize: '1.5rem', fontWeight: 700, color: '#3b82f6' }}>{config.emails.length}</div>
+          <div style={{ fontSize: '.75rem', color: '#666' }}>📧 Emails autorizados</div>
+        </div>
+      </div>
+
+      {/* New domain form */}
+      <div style={{ background: '#1a1a1a', borderRadius: 10, padding: '1rem', marginBottom: '1rem' }}>
+        <h3 style={{ fontSize: '.9rem', margin: '0 0 .75rem', color: '#e5e5e5' }}>🛡️ Adicionar domínio ao Zero Trust</h3>
+        <div style={{ display: 'flex', gap: '.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          {/* Subdomain */}
+          <div style={{ flex: 1, minWidth: 200 }}>
+            {useCustom ? (
+              <input value={customSubdomain} onChange={e => setCustomSubdomain(e.target.value)}
+                placeholder="subdominio"
+                style={{ width: '100%', background: '#262626', border: '1px solid #333', color: '#e5e5e5', padding: '.4rem .65rem', borderRadius: 6, fontSize: '.85rem' }}
+                onKeyDown={handleKeyDown} />
+            ) : (
+              <select value={subdomain} onChange={e => setSubdomain(e.target.value)}
+                style={{ width: '100%', background: '#262626', border: '1px solid #333', color: '#e5e5e5', padding: '.4rem .65rem', borderRadius: 6, fontSize: '.85rem' }}>
+                <option value="">Selecione um subdomínio .uk</option>
+                {subdomains.map(s => (
+                  <option key={s.full} value={s.name}>{s.name}</option>
+                ))}
+              </select>
+            )}
           </div>
-        ))}
+
+          {/* Separator dot */}
+          <span style={{ color: '#666', fontSize: '1.2rem', fontWeight: 700 }}>.</span>
+
+          {/* Domain zone */}
+          <select value={selectedZone} onChange={e => setSelectedZone(e.target.value)}
+            style={{ background: '#262626', border: '1px solid #333', color: '#e5e5e5', padding: '.4rem .65rem', borderRadius: 6, fontSize: '.85rem' }}>
+            {zones.map(z => <option key={z.name} value={z.name}>{z.name}</option>)}
+          </select>
+
+          {/* Toggle custom */}
+          <label style={{ display: 'flex', alignItems: 'center', gap: '.3rem', color: '#666', fontSize: '.8rem', cursor: 'pointer' }}>
+            <input type="checkbox" checked={useCustom} onChange={e => setUseCustom(e.target.checked)} />
+            Digitar manualmente
+          </label>
+        </div>
+
+        {/* Preview + button */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '.75rem' }}>
+          <span style={{ color: '#666', fontSize: '.85rem' }}>
+            {getFullDomain() ? (
+              <>Domínio: <strong style={{ color: '#22c55e' }}>{getFullDomain()}</strong></>
+            ) : (
+              'Selecione ou digite um subdomínio'
+            )}
+          </span>
+          <button onClick={activateAccess} disabled={!getFullDomain()}
+            style={{ background: getFullDomain() ? '#22c55e' : '#333', color: getFullDomain() ? '#000' : '#666', border: 'none', padding: '.4rem 1rem', borderRadius: 6, cursor: getFullDomain() ? 'pointer' : 'default', fontSize: '.85rem', fontWeight: 600 }}>
+            ✅ Ativar Zero Trust
+          </button>
+        </div>
       </div>
 
-      {/* Filters */}
-      <div style={{ display: 'flex', gap: '.35rem', marginBottom: '.75rem', flexWrap: 'wrap' }}>
-        {btnF('all', '📋 Todos')}
-        {btnF('active', '✅ Zero Trust')}
-        {btnF('protected', '🔒 Protegidos')}
-        {btnF('com', '🌐 devgiglio.com')}
-        {btnF('public', '🌎 Público')}
+      {/* Active domains */}
+      <div style={{ marginBottom: '1.5rem' }}>
+        <h3 style={{ fontSize: '.9rem', margin: '0 0 .5rem', color: '#e5e5e5' }}>✅ Domínios protegidos</h3>
+        {loading ? (
+          <p style={{ color: '#555', padding: '1rem', fontSize: '.85rem' }}>Carregando...</p>
+        ) : domains.length === 0 ? (
+          <p style={{ color: '#555', padding: '1rem', fontSize: '.85rem', background: '#1a1a1a', borderRadius: 10 }}>Nenhum domínio com Zero Trust ativo</p>
+        ) : (
+          <div style={{ background: '#1a1a1a', borderRadius: 10, overflow: 'hidden' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid #2a2a2a', fontSize: '.75rem', color: '#666', textAlign: 'left' }}>
+                  <th style={{ padding: '.6rem 1rem' }}>Domínio</th>
+                  <th style={{ padding: '.6rem 1rem' }}>Ação</th>
+                </tr>
+              </thead>
+              <tbody>
+                {domains.map(d => (
+                  <tr key={d.id} style={{ borderBottom: '1px solid #222', fontSize: '.85rem' }}>
+                    <td style={{ padding: '.6rem 1rem', fontWeight: 500, color: '#22c55e' }}>
+                      ✅ {d.name}
+                    </td>
+                    <td style={{ padding: '.6rem 1rem' }}>
+                      <button onClick={() => removeAccess(d.name)}
+                        style={{ background: '#ef4444', color: '#fff', border: 'none', padding: '.3rem .65rem', borderRadius: 6, cursor: 'pointer', fontSize: '.75rem', fontWeight: 600 }}>
+                        🗑️ Remover
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
-      {/* Emails config */}
-      <div style={{ background: '#1a1a1a', borderRadius: 10, padding: '.75rem 1rem', marginBottom: '1rem' }}>
-        <h3 style={{ fontSize: '.9rem', margin: '0 0 .5rem', color: '#e5e5e5' }}>📧 Emails permitidos no Zero Trust</h3>
+      {/* Emails */}
+      <div style={{ background: '#1a1a1a', borderRadius: 10, padding: '1rem', marginBottom: '1rem' }}>
+        <h3 style={{ fontSize: '.9rem', margin: '0 0 .5rem', color: '#e5e5e5' }}>📧 Emails autorizados</h3>
         <div style={{ display: 'flex', gap: '.35rem', flexWrap: 'wrap', marginBottom: '.5rem' }}>
           {config.emails.map(e => (
             <span key={e} style={{ background: '#262626', padding: '.25rem .6rem', borderRadius: 6, fontSize: '.8rem', display: 'flex', alignItems: 'center', gap: '.35rem' }}>
@@ -198,102 +262,16 @@ function App() {
             placeholder="email@exemplo.com"
             style={{ flex: 1, background: '#262626', border: '1px solid #333', color: '#e5e5e5', padding: '.35rem .65rem', borderRadius: 6, fontSize: '.8rem' }}
             onKeyDown={e => e.key === 'Enter' && addEmail()} />
-          <button onClick={addEmail} style={{ background: '#3b82f6', color: '#fff', border: 'none', padding: '.35rem .75rem', borderRadius: 6, cursor: 'pointer', fontSize: '.8rem' }}>
-            Adicionar
-          </button>
+          <button onClick={addEmail} style={{ background: '#3b82f6', color: '#fff', border: 'none', padding: '.35rem .75rem', borderRadius: 6, cursor: 'pointer', fontSize: '.8rem' }}>Adicionar</button>
           <button onClick={syncEmails} style={{ background: '#22c55e', color: '#000', border: 'none', padding: '.35rem .75rem', borderRadius: 6, cursor: 'pointer', fontSize: '.8rem', fontWeight: 600 }}>
-            🔄 Sincronizar com apps existentes
+            🔄 Sincronizar
           </button>
         </div>
       </div>
 
-      {/* .com domain quick-add */}
-      <div style={{ background: '#1a1a1a', borderRadius: 10, padding: '.75rem 1rem', marginBottom: '1rem' }}>
-        <h3 style={{ fontSize: '.9rem', margin: '0 0 .5rem', color: '#e5e5e5' }}>🌐 Adicionar domínio .com</h3>
-        <p style={{ fontSize: '.75rem', color: '#666', margin: '0 0 .5rem' }}>
-          Digite um domínio de {config.zones?.com || 'devgiglio.com'} para ativar o Zero Trust
-        </p>
-        <div style={{ display: 'flex', gap: '.5rem' }}>
-          <input value={comDomain} onChange={e => setComDomain(e.target.value)}
-            placeholder="ex: dokploy.devgiglio.com"
-            style={{ flex: 1, background: '#262626', border: '1px solid #333', color: '#e5e5e5', padding: '.35rem .65rem', borderRadius: 6, fontSize: '.8rem' }}
-            onKeyDown={e => e.key === 'Enter' && addComDomain()} />
-          <button onClick={addComDomain} style={{ background: '#3b82f6', color: '#fff', border: 'none', padding: '.35rem .75rem', borderRadius: 6, cursor: 'pointer', fontSize: '.8rem', fontWeight: 600 }}>
-            Adicionar à lista
-          </button>
-          <button onClick={() => activateAccess(comDomain)}
-            style={{ background: '#22c55e', color: '#000', border: 'none', padding: '.35rem .75rem', borderRadius: 6, cursor: 'pointer', fontSize: '.8rem', fontWeight: 600 }}>
-            ✅ Ativar Zero Trust
-          </button>
-        </div>
-      </div>
-
-      {/* Table */}
-      {loading ? (
-        <p style={{ textAlign: 'center', color: '#555', padding: '3rem' }}>Carregando...</p>
-      ) : (
-        <div style={{ background: '#1a1a1a', borderRadius: 10, overflow: 'hidden' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr style={{ borderBottom: '1px solid #2a2a2a', fontSize: '.75rem', color: '#666', textAlign: 'left' }}>
-                <th style={{ padding: '.6rem 1rem' }}>Domínio</th>
-                <th style={{ padding: '.6rem 1rem' }}>Zona</th>
-                <th style={{ padding: '.6rem 1rem' }}>Status</th>
-                <th style={{ padding: '.6rem 1rem' }}>Método</th>
-                <th style={{ padding: '.6rem 1rem' }}>Ação</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map(d => {
-                const isUk = d.zone === 'uk'
-                const isProtected = d.protection !== 'none'
-                const statusColor = d.hasAccess ? '#22c55e' : isProtected ? '#f59e0b' : '#666'
-                const statusIcon = d.hasAccess ? '✅' : isProtected ? '⏳' : '🌐'
-                const statusLabel = d.hasAccess ? 'Ativo' : isProtected ? 'Pendente' : 'Público'
-                return (
-                  <tr key={d.id} style={{ borderBottom: '1px solid #222', fontSize: '.85rem' }}>
-                    <td style={{ padding: '.6rem 1rem', fontWeight: 500 }}>{d.name}</td>
-                    <td style={{ padding: '.6rem 1rem', fontSize: '.75rem', color: '#666' }}>
-                      {d.zone === 'uk' ? <span style={{ color: '#3b82f6' }}>.uk</span> :
-                       d.zone === 'com' ? <span style={{ color: '#f59e0b' }}>.com</span> : '-'}
-                    </td>
-                    <td style={{ padding: '.6rem 1rem' }}>
-                      <span style={{ color: statusColor }}>{statusIcon} {statusLabel}</span>
-                    </td>
-                    <td style={{ padding: '.6rem 1rem' }}>
-                      <select value={d.protection} onChange={e => setProtection(d.name, e.target.value)}
-                        style={{ background: '#262626', border: '1px solid #333', color: '#e5e5e5', padding: '.3rem .5rem', borderRadius: 6, fontSize: '.75rem', cursor: 'pointer' }}>
-                        <option value="cloudflare">🔒 Cloudflare</option>
-                        <option value="wireguard">🔐 WireGuard</option>
-                        <option value="none">🌐 Público</option>
-                      </select>
-                    </td>
-                    <td style={{ padding: '.6rem 1rem' }}>
-                      {!d.hasAccess && d.protection === 'cloudflare' && (
-                        <button onClick={() => activateAccess(d.name)}
-                          style={{ background: '#22c55e', color: '#000', border: 'none', padding: '.3rem .6rem', borderRadius: 6, cursor: 'pointer', fontSize: '.75rem', fontWeight: 600 }}>
-                          ✅ Ativar
-                        </button>
-                      )}
-                      {d.hasAccess && (
-                        <button onClick={() => removeAccess(d.name)}
-                          style={{ background: '#ef4444', color: '#fff', border: 'none', padding: '.3rem .6rem', borderRadius: 6, cursor: 'pointer', fontSize: '.75rem', fontWeight: 600 }}>
-                          🗑️ Remover
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-          {filtered.length === 0 && <p style={{ textAlign: 'center', color: '#555', padding: '2rem', fontSize: '.8rem' }}>Nenhum domínio</p>}
-        </div>
-      )}
-
-      <footer style={{ marginTop: '1.5rem', fontSize: '.75rem', color: '#444', textAlign: 'center' }}>
-        <p>✅ Zero Trust = Autenticação via email antes de acessar</p>
-        <p>🔐 WireGuard = Requer VPN na VPS</p>
+      <footer style={{ fontSize: '.75rem', color: '#444', textAlign: 'center' }}>
+        <p>✅ Zero Trust = autenticação via email antes de acessar o domínio</p>
+        <p>Configuração gerenciada via Cloudflare Zero Trust API</p>
       </footer>
     </div>
   )

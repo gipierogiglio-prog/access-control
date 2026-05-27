@@ -12,11 +12,11 @@ const ZONES = {
 };
 const DIST = path.join(__dirname, 'frontend/dist');
 const CONFIG_FILE = '/data/access-config.json';
-const MIME = { '.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css', '.png': 'image/png' };
+const MIME = { '.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css' };
 
 function loadConfig() {
   try { if (fs.existsSync(CONFIG_FILE)) return JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8')); } catch(e) {}
-  return { emails: ['gi.pierogiglio@gmail.com'], domains: {} };
+  return { emails: ['gi.pierogiglio@gmail.com'] };
 }
 function saveConfig(cfg) {
   try { fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true }); fs.writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2)); return true; } catch(e) { return false; }
@@ -49,76 +49,43 @@ function serveStatic(url, res) {
   });
 }
 
-function readBody(req) {
-  return new Promise(resolve => { let b=''; req.on('data',c=>b+=c); req.on('end',()=>resolve(b)); });
-}
+function readBody(req) { return new Promise(resolve => { let b=''; req.on('data',c=>b+=c); req.on('end',()=>resolve(b)); }); }
 
 http.createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   const url = req.url.split('?')[0];
 
-  // GET /api/domains - list domains from .uk zone + config
+  // GET /api/domains - only domains with Zero Trust
   if (url === '/api/domains' && req.method === 'GET') {
     try {
-      const config = loadConfig();
-      const [records, accessApps] = await Promise.all([
-        dnsApi(`/client/v4/zones/${ZONES.uk.id}/dns_records?per_page=50`),
-        cfApi(`/client/v4/accounts/${ACCOUNT}/access/apps`)
-      ]);
-      
-      const cfDomains = new Set((accessApps.result || []).map(a => a.domain));
-      const domainCfg = config.domains || {};
-      
-      const domains = (records.result || []).filter(r => r.type === 'A').map(r => ({
-        id: r.id, name: r.name, zone: 'uk', content: r.content, proxied: r.proxied,
-        protection: domainCfg[r.name] || (cfDomains.has(r.name) ? 'cloudflare' : 'none'),
-        hasAccess: cfDomains.has(r.name)
+      const accessApps = await cfApi(`/client/v4/accounts/${ACCOUNT}/access/apps`);
+      const domains = (accessApps.result || []).map(a => ({
+        id: a.id,
+        name: a.domain,
+        appName: a.name,
+        created: a.created_at
       }));
-      
-      // Add manually configured domains (including .com)
-      for (const [name, type] of Object.entries(domainCfg)) {
-        if (!domains.find(d => d.name === name)) {
-          const zone = name.endsWith('.devgiglio.com') ? 'com' : 'manual';
-          domains.push({ id: 'manual-' + name, name, zone, content: '-', proxied: false, protection: type, hasAccess: cfDomains.has(name) });
-        }
-      }
-      
-      
-      // Also include domains that have Access but are not in CF zone or config
-      for (const app of (accessApps.result || [])) {
-        if (!domains.find(d => d.name === app.domain)) {
-          const zone = app.domain.endsWith('.devgiglio.uk') ? 'uk' : app.domain.endsWith('.devgiglio.com') ? 'com' : 'manual';
-          domains.push({ id: 'access-' + app.id, name: app.domain, zone, content: '-', proxied: true, protection: 'cloudflare', hasAccess: true });
-        }
-      }
       res.setHeader('Content-Type', 'application/json');
-      res.end(JSON.stringify({
-        domains: domains.sort((a, b) => a.name.localeCompare(b.name)),
-        config: {
-          emails: config.emails || ['gi.pierogiglio@gmail.com'],
-          zones: { uk: ZONES.uk.name, com: ZONES.com.name }
-        }
+      res.end(JSON.stringify({ domains: domains.sort((a, b) => a.name.localeCompare(b.name)), config: { emails: (loadConfig().emails || ['gi.pierogiglio@gmail.com']) } }));
+    } catch(e) { res.statusCode = 500; res.end(JSON.stringify({ error: e.message })); }
+    return;
+  }
+
+  // GET /api/subdomains - list A records from .uk zone for the select dropdown
+  if (url === '/api/subdomains' && req.method === 'GET') {
+    try {
+      const records = await dnsApi(`/client/v4/zones/${ZONES.uk.id}/dns_records?per_page=50`);
+      const subs = (records.result || []).filter(r => r.type === 'A').map(r => ({
+        name: r.name.replace('.devgiglio.uk', ''),
+        full: r.name
       }));
-    } catch(e) {
-      res.statusCode = 500;
-      res.end(JSON.stringify({ error: e.message }));
-    }
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ uk: subs, zones: [{ name: 'devgiglio.uk' }, { name: 'devgiglio.com' }] }));
+    } catch(e) { res.statusCode = 500; res.end(JSON.stringify({ error: e.message })); }
     return;
   }
 
-  // POST /api/protection/set
-  if (url === '/api/protection/set' && req.method === 'POST') {
-    const body = JSON.parse(await readBody(req));
-    const config = loadConfig();
-    if (!config.domains) config.domains = {};
-    if (body.type === 'none') delete config.domains[body.name];
-    else config.domains[body.name] = body.type;
-    saveConfig(config);
-    res.end(JSON.stringify({ success: true }));
-    return;
-  }
-
-  // POST /api/emails/set - configure allowed emails
+  // POST /api/emails/set
   if (url === '/api/emails/set' && req.method === 'POST') {
     const body = JSON.parse(await readBody(req));
     const config = loadConfig();
@@ -128,34 +95,25 @@ http.createServer(async (req, res) => {
     return;
   }
 
-  // POST /api/access/create - create Zero Trust application
+  // POST /api/access/create
   if (url === '/api/access/create' && req.method === 'POST') {
     const body = JSON.parse(await readBody(req));
     const config = loadConfig();
     const emails = config.emails || ['gi.pierogiglio@gmail.com'];
     try {
       const policies = emails.map(email => ({
-        name: `Allow ${email}`,
-        decision: 'allow',
-        include: [{ email: { email } }]
+        name: `Allow ${email}`, decision: 'allow', include: [{ email: { email } }]
       }));
       const result = await cfApi(`/client/v4/accounts/${ACCOUNT}/access/apps`, 'POST', {
-        name: body.name,
-        domain: body.domain,
-        type: 'self_hosted',
-        session_duration: '24h',
-        policies
+        name: body.name, domain: body.domain, type: 'self_hosted', session_duration: '24h', policies
       });
       res.setHeader('Content-Type', 'application/json');
       res.end(JSON.stringify(result));
-    } catch(e) {
-      res.statusCode = 500;
-      res.end(JSON.stringify({ error: e.message }));
-    }
+    } catch(e) { res.statusCode = 500; res.end(JSON.stringify({ error: e.message })); }
     return;
   }
 
-  // DELETE /api/access/remove
+  // POST /api/access/remove
   if (url === '/api/access/remove' && req.method === 'POST') {
     const body = JSON.parse(await readBody(req));
     try {
@@ -164,30 +122,12 @@ http.createServer(async (req, res) => {
       if (app) {
         await cfApi(`/client/v4/accounts/${ACCOUNT}/access/apps/${app.id}`, 'DELETE');
         res.end(JSON.stringify({ success: true }));
-      } else {
-        res.end(JSON.stringify({ success: false, error: 'App not found' }));
-      }
-    } catch(e) {
-      res.statusCode = 500;
-      res.end(JSON.stringify({ error: e.message }));
-    }
+      } else { res.end(JSON.stringify({ success: false, error: 'App not found' })); }
+    } catch(e) { res.statusCode = 500; res.end(JSON.stringify({ error: e.message })); }
     return;
   }
 
-  
-
-  // GET /api/check - debug config
-  if (url === '/api/check' && req.method === 'GET') {
-    try {
-      const raw = fs.existsSync(CONFIG_FILE) ? fs.readFileSync(CONFIG_FILE, 'utf-8') : 'ARQUIVO NAO EXISTE';
-      res.setHeader('Content-Type', 'text/plain');
-      res.end(raw);
-    } catch(e) {
-      res.end('Erro: ' + e.message);
-    }
-    return;
-  }
-  // POST /api/access/sync - sync emails to all Access applications
+  // POST /api/access/sync
   if (url === '/api/access/sync' && req.method === 'POST') {
     const config = loadConfig();
     const emails = config.emails || ['gi.pierogiglio@gmail.com'];
@@ -196,22 +136,13 @@ http.createServer(async (req, res) => {
       const results = [];
       for (const app of (apps.result || [])) {
         const policies = emails.map(email => ({
-          name: `Allow ${email}`,
-          decision: 'allow',
-          include: [{ email: { email } }]
+          name: `Allow ${email}`, decision: 'allow', include: [{ email: { email } }]
         }));
-        const update = await cfApi(`/client/v4/accounts/${ACCOUNT}/access/apps/${app.id}`, 'PUT', {
-          ...app,
-          policies
-        });
+        const update = await cfApi(`/client/v4/accounts/${ACCOUNT}/access/apps/${app.id}`, 'PUT', { ...app, policies });
         results.push({ domain: app.domain, success: update.success });
       }
-      res.setHeader('Content-Type', 'application/json');
       res.end(JSON.stringify({ success: true, results }));
-    } catch(e) {
-      res.statusCode = 500;
-      res.end(JSON.stringify({ error: e.message }));
-    }
+    } catch(e) { res.statusCode = 500; res.end(JSON.stringify({ error: e.message })); }
     return;
   }
 
