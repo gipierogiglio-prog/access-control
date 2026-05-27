@@ -97,6 +97,19 @@ function App() {
     await load()
   }
 
+  const syncEmails = async () => {
+    msg('⏳ Sincronizando emails com todas as apps...')
+    const res = await fetch(`${API}/api/access/sync`, { method: 'POST' })
+    const data = await res.json()
+    if (data.success) {
+      const total = data.results?.length || 0
+      const ok = data.results?.filter((r: any) => r.success).length || 0
+      msg(`✅ ${ok}/${total} aplicações atualizadas com os emails!`)
+    } else {
+      msg(`❌ ${data.error || 'Erro ao sincronizar'}`)
+    }
+  }
+
   const addComDomain = async () => {
     if (!comDomain) return
     await fetch(`${API}/api/protection/set`, {
@@ -187,6 +200,9 @@ function App() {
             onKeyDown={e => e.key === 'Enter' && addEmail()} />
           <button onClick={addEmail} style={{ background: '#3b82f6', color: '#fff', border: 'none', padding: '.35rem .75rem', borderRadius: 6, cursor: 'pointer', fontSize: '.8rem' }}>
             Adicionar
+          </button>
+          <button onClick={syncEmails} style={{ background: '#22c55e', color: '#000', border: 'none', padding: '.35rem .75rem', borderRadius: 6, cursor: 'pointer', fontSize: '.8rem', fontWeight: 600 }}>
+            🔄 Sincronizar com apps existentes
           </button>
         </div>
       </div>

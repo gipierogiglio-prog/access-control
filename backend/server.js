@@ -166,5 +166,34 @@ http.createServer(async (req, res) => {
     return;
   }
 
+  
+  // POST /api/access/sync - sync emails to all Access applications
+  if (url === '/api/access/sync' && req.method === 'POST') {
+    const config = loadConfig();
+    const emails = config.emails || ['gi.pierogiglio@gmail.com'];
+    try {
+      const apps = await cfApi(`/client/v4/accounts/${ACCOUNT}/access/apps`);
+      const results = [];
+      for (const app of (apps.result || [])) {
+        const policies = emails.map(email => ({
+          name: `Allow ${email}`,
+          decision: 'allow',
+          include: [{ email: { email } }]
+        }));
+        const update = await cfApi(`/client/v4/accounts/${ACCOUNT}/access/apps/${app.id}`, 'PUT', {
+          ...app,
+          policies
+        });
+        results.push({ domain: app.domain, success: update.success });
+      }
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ success: true, results }));
+    } catch(e) {
+      res.statusCode = 500;
+      res.end(JSON.stringify({ error: e.message }));
+    }
+    return;
+  }
+
   serveStatic(url, res);
 }).listen(process.env.PORT || 3001, '0.0.0.0', () => console.log('[DASH] OK'));
