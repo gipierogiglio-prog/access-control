@@ -24,10 +24,23 @@ function App() {
   const [newEmail, setNewEmail] = useState('')
 
   // New domain form
-  const [subdomain, setSubdomain] = useState('')
+  const [subInput, setSubInput] = useState('')
   const [selectedZone, setSelectedZone] = useState('devgiglio.uk')
-  const [customSubdomain, setCustomSubdomain] = useState('')
-  const [useCustom, setUseCustom] = useState(false)
+  const [zoneDisabled, setZoneDisabled] = useState(false)
+
+  // Check if input matches a .uk subdomain
+  const matchUk = subInput ? subdomains.find(s => s.name === subInput.trim()) : null
+  
+  const handleSubChange = (val: string) => {
+    setSubInput(val)
+    const match = subdomains.find(s => s.name === val.trim())
+    if (match) {
+      setSelectedZone('devgiglio.uk')
+      setZoneDisabled(true)
+    } else {
+      setZoneDisabled(false)
+    }
+  }
 
   const load = async () => {
     setLoading(true)
@@ -55,7 +68,7 @@ function App() {
   const msg = (s: string) => { setActionMsg(s); setTimeout(() => setActionMsg(''), 4000) }
 
   const getFullDomain = () => {
-    const sub = useCustom ? customSubdomain.trim() : subdomain
+    const sub = subInput.trim()
     if (!sub) return ''
     return `${sub}.${selectedZone}`
   }
@@ -72,8 +85,9 @@ function App() {
     const data = await res.json()
     if (data.success) {
       msg(`✅ ${full} protegido com Zero Trust!`)
-      setSubdomain('')
-      setCustomSubdomain('')
+      setSubInput('')
+      setSelectedZone('devgiglio.uk')
+      setZoneDisabled(false)
       await load()
     } else {
       msg(`❌ ${data.errors?.[0]?.message || data.error || 'Erro'}`)
@@ -160,38 +174,32 @@ function App() {
       <div style={{ background: '#1a1a1a', borderRadius: 10, padding: '1rem', marginBottom: '1rem' }}>
         <h3 style={{ fontSize: '.9rem', margin: '0 0 .75rem', color: '#e5e5e5' }}>🛡️ Adicionar domínio ao Zero Trust</h3>
         <div style={{ display: 'flex', gap: '.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
-          {/* Subdomain */}
-          <div style={{ flex: 1, minWidth: 200 }}>
-            {useCustom ? (
-              <input value={customSubdomain} onChange={e => setCustomSubdomain(e.target.value)}
-                placeholder="subdominio"
-                style={{ width: '100%', background: '#262626', border: '1px solid #333', color: '#e5e5e5', padding: '.4rem .65rem', borderRadius: 6, fontSize: '.85rem' }}
-                onKeyDown={handleKeyDown} />
-            ) : (
-              <select value={subdomain} onChange={e => setSubdomain(e.target.value)}
-                style={{ width: '100%', background: '#262626', border: '1px solid #333', color: '#e5e5e5', padding: '.4rem .65rem', borderRadius: 6, fontSize: '.85rem' }}>
-                <option value="">Selecione um subdomínio .uk</option>
-                {subdomains.map(s => (
-                  <option key={s.full} value={s.name}>{s.name}</option>
-                ))}
-              </select>
-            )}
+          {/* Combobox: input + datalist */}
+          <div style={{ flex: 1, minWidth: 200, position: 'relative' }}>
+            <input value={subInput}
+              onChange={e => handleSubChange(e.target.value)}
+              placeholder="Digite ou selecione um subdomínio"
+              list="sub-list"
+              style={{ width: '100%', background: '#262626', border: '1px solid #333', color: '#e5e5e5', padding: '.4rem .65rem', borderRadius: 6, fontSize: '.85rem', boxSizing: 'border-box' }}
+              onKeyDown={handleKeyDown} />
+            <datalist id="sub-list">
+              {subdomains.map(s => (
+                <option key={s.full} value={s.name} />
+              ))}
+            </datalist>
           </div>
 
           {/* Separator dot */}
           <span style={{ color: '#666', fontSize: '1.2rem', fontWeight: 700 }}>.</span>
 
-          {/* Domain zone */}
+          {/* Domain zone - disabled if .uk match */}
           <select value={selectedZone} onChange={e => setSelectedZone(e.target.value)}
-            style={{ background: '#262626', border: '1px solid #333', color: '#e5e5e5', padding: '.4rem .65rem', borderRadius: 6, fontSize: '.85rem' }}>
+            disabled={zoneDisabled}
+            style={{ background: zoneDisabled ? '#1a1a1a' : '#262626', border: '1px solid #333', color: zoneDisabled ? '#555' : '#e5e5e5', padding: '.4rem .65rem', borderRadius: 6, fontSize: '.85rem', cursor: zoneDisabled ? 'not-allowed' : 'pointer' }}>
             {zones.map(z => <option key={z.name} value={z.name}>{z.name}</option>)}
           </select>
 
-          {/* Toggle custom */}
-          <label style={{ display: 'flex', alignItems: 'center', gap: '.3rem', color: '#666', fontSize: '.8rem', cursor: 'pointer' }}>
-            <input type="checkbox" checked={useCustom} onChange={e => setUseCustom(e.target.checked)} />
-            Digitar manualmente
-          </label>
+          {matchUk && <span style={{ color: '#3b82f6', fontSize: '.75rem' }}>🔒 .uk detectado</span>}
         </div>
 
         {/* Preview + button */}
