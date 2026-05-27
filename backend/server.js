@@ -167,6 +167,18 @@ http.createServer(async (req, res) => {
   }
 
   
+
+  // GET /api/check - debug config
+  if (url === '/api/check' && req.method === 'GET') {
+    try {
+      const raw = fs.existsSync(CONFIG_FILE) ? fs.readFileSync(CONFIG_FILE, 'utf-8') : 'ARQUIVO NAO EXISTE';
+      res.setHeader('Content-Type', 'text/plain');
+      res.end(raw);
+    } catch(e) {
+      res.end('Erro: ' + e.message);
+    }
+    return;
+  }
   // POST /api/access/sync - sync emails to all Access applications
   if (url === '/api/access/sync' && req.method === 'POST') {
     const config = loadConfig();
