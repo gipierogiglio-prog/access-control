@@ -83,6 +83,14 @@ http.createServer(async (req, res) => {
         }
       }
       
+      
+      // Also include domains that have Access but are not in CF zone or config
+      for (const app of (accessApps.result || [])) {
+        if (!domains.find(d => d.name === app.domain)) {
+          const zone = app.domain.endsWith('.devgiglio.uk') ? 'uk' : app.domain.endsWith('.devgiglio.com') ? 'com' : 'manual';
+          domains.push({ id: 'access-' + app.id, name: app.domain, zone, content: '-', proxied: true, protection: 'cloudflare', hasAccess: true });
+        }
+      }
       res.setHeader('Content-Type', 'application/json');
       res.end(JSON.stringify({
         domains: domains.sort((a, b) => a.name.localeCompare(b.name)),
