@@ -9,7 +9,7 @@ variables:
   - name: APP_NAME
     value: access-control
 
-pool: devgiglio
+pool: Default
 
 steps:
   - bash: |
